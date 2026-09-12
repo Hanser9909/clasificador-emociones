@@ -1,0 +1,266 @@
+# transformers -> BertTokenizer + BertModel (backend PyTorch)
+!pip install -q transformers datasets
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+
+from datasets import load_dataset
+from transformers import BertTokenizer, BertModel
+
+# Fijo semillas para que los resultados sean algo más reproducibles
+SEED = 42
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+
+# Uso GPU si está disponible
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("PyTorch:", torch.__version__)
+print("Dispositivo:", device)
+
+# Cargo el dataset desde el Hub de Hugging Face
+dataset = load_dataset("dair-ai/emotion")
+print(dataset)
+
+# Nombres de las clases
+class_names = dataset["train"].features["label"].names
+num_classes = len(class_names)
+print("Número de clases:", num_classes)
+print("Clases:", class_names)
+
+df_train = dataset["train"].to_pandas()
+df_val   = dataset["validation"].to_pandas()
+df_test  = dataset["test"].to_pandas()
+
+print("Tamaños -> train:", df_train.shape, "| val:", df_val.shape, "| test:", df_test.shape)
+df_train.head()
+
+counts = df_train["label"].value_counts().sort_index()
+
+plt.figure(figsize=(8, 4))
+sns.barplot(x=[class_names[i] for i in counts.index], y=counts.values)
+plt.title("Distribución de clases en el conjunto de entrenamiento")
+plt.ylabel("n. de ejemplos"); plt.xlabel("emoción")
+plt.xticks(rotation=20)
+plt.show()
+
+for i, c in counts.items():
+    print(f"{class_names[i]:>10}: {c:5d}  ({100*c/len(df_train):.1f} %)")
+
+# Algunos ejemplos de cada clase
+for c in range(num_classes):
+    ejemplo = df_train[df_train["label"] == c]["text"].iloc[0]
+    print(f"[{class_names[c]}] -> {ejemplo}")
+
+# Longitud de los textos
+df_train["n_palabras"] = df_train["text"].str.split().apply(len)
+print(df_train["n_palabras"].describe())
+
+print("\nPercentiles de longitud:")
+for p in [50, 90, 95, 99]:
+    print(f"  P{p}: {np.percentile(df_train['n_palabras'], p):.0f} palabras")
+
+plt.figure(figsize=(8, 4))
+sns.histplot(df_train["n_palabras"], bins=50)
+plt.title("Distribución de longitudes de los textos (nº de palabras)")
+plt.xlabel("n. de palabras")
+plt.show()
+
+def proporciones(df):
+    return (df["label"].value_counts(normalize=True).sort_index() * 100).round(1)
+
+tabla = pd.DataFrame({
+    "train (%)": proporciones(df_train),
+    "val (%)":   proporciones(df_val),
+    "test (%)":  proporciones(df_test),
+})
+tabla.index = class_names
+tabla
+
+# Extraigo textos (X) y etiquetas (y) como arrays de numpy
+X_train, y_train = df_train["text"].values, df_train["label"].values
+X_val,   y_val   = df_val["text"].values,   df_val["label"].values
+X_test,  y_test  = df_test["text"].values,  df_test["label"].values
+
+print("X_train:", X_train.shape, "| y_train:", y_train.shape)
+print("X_val:  ", X_val.shape,   "| y_val:  ", y_val.shape)
+print("X_test: ", X_test.shape,  "| y_test: ", y_test.shape)
+
+MODEL_NAME = "bert-base-uncased"
+MAX_LEN = 64   # justificado en la Tarea 2: los textos son muy cortos
+
+tokenizer = BertTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
+
+def tokenizar(textos, max_len=MAX_LEN):
+    """Tokeniza una lista de textos con padding y truncado a longitud fija. Devuelve tensores de PyTorch."""
+    enc = tokenizer(
+        list(textos),
+        padding="max_length",   # relleno hasta max_len
+        truncation=True,        # corto lo que pase de max_len
+        max_length=max_len,
+        return_tensors="pt",    # tensores de PyTorch
+    )
+    # Para clasificar una sola frase me basta con input_ids y attention_mask
+    # (token_type_ids serían todo ceros porque no hay pares de frases).
+    return enc["input_ids"], enc["attention_mask"]
+
+train_ids, train_mask = tokenizar(X_train)
+val_ids,   val_mask   = tokenizar(X_val)
+test_ids,  test_mask  = tokenizar(X_test)
+
+print("input_ids shape:", train_ids.shape)
+print("attention_mask shape:", train_mask.shape)
+
+print("Texto original:", X_train[0])
+tokens = tokenizer.convert_ids_to_tokens(train_ids[0])
+print("Tokens (primeros 25):", tokens[:25])
+
+BATCH_SIZE = 32
+
+train_ds = TensorDataset(train_ids, train_mask, torch.tensor(y_train, dtype=torch.long))
+val_ds   = TensorDataset(val_ids,   val_mask,   torch.tensor(y_val,   dtype=torch.long))
+test_ds  = TensorDataset(test_ids,  test_mask,  torch.tensor(y_test,  dtype=torch.long))
+
+train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+val_dl   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False)
+test_dl  = DataLoader(test_ds,  batch_size=BATCH_SIZE, shuffle=False)
+
+class BertClassifier(nn.Module):
+    def __init__(self, num_classes, model_name=MODEL_NAME, dropout_rate=0.3):
+        super().__init__()
+        self.bert = BertModel.from_pretrained(model_name)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_classes)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_token = outputs.last_hidden_state[:, 0, :]   # embedding del token [CLS] -> (batch, 768)
+        x = self.dropout(cls_token)
+        logits = self.classifier(x)                      # (batch, num_classes)
+        return logits
+
+model = BertClassifier(num_classes).to(device)
+n_params = sum(p.numel() for p in model.parameters())
+print(model)
+print(f"\nNúmero total de parámetros: {n_params:,}")
+
+# Función auxiliar para evaluar (loss y accuracy) sobre un DataLoader
+def evaluar(model, dataloader, criterion):
+    model.eval()
+    total_loss, correct, n = 0.0, 0, 0
+    with torch.no_grad():
+        for input_ids, attention_mask, labels in dataloader:
+            input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
+            logits = model(input_ids, attention_mask)
+            loss = criterion(logits, labels)
+            total_loss += loss.item() * labels.size(0)
+            correct += (logits.argmax(dim=1) == labels).sum().item()
+            n += labels.size(0)
+    return total_loss / n, correct / n
+
+criterion = nn.CrossEntropyLoss()                      # aplica softmax internamente sobre los logits
+optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+
+EPOCHS = 4
+PATIENCE = 2
+
+history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+best_val_loss = float("inf")
+best_state = None
+epochs_sin_mejora = 0
+
+for epoch in range(1, EPOCHS + 1):
+    # Entrenamiento
+    model.train()
+    total_loss, correct, n = 0.0, 0, 0
+    for input_ids, attention_mask, labels in train_dl:
+        input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        logits = model(input_ids, attention_mask)
+        loss = criterion(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * labels.size(0)
+        correct += (logits.argmax(dim=1) == labels).sum().item()
+        n += labels.size(0)
+
+    train_loss, train_acc = total_loss / n, correct / n
+
+    # Validación
+    val_loss, val_acc = evaluar(model, val_dl, criterion)
+
+    history["train_loss"].append(train_loss); history["val_loss"].append(val_loss)
+    history["train_acc"].append(train_acc);   history["val_acc"].append(val_acc)
+
+    print(f"Epoch {epoch}/{EPOCHS} | "
+          f"train_loss={train_loss:.4f} acc={train_acc:.4f} | "
+          f"val_loss={val_loss:.4f} acc={val_acc:.4f}")
+
+    # Early stopping (guardo los mejores pesos)
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        epochs_sin_mejora = 0
+    else:
+        epochs_sin_mejora += 1
+        if epochs_sin_mejora >= PATIENCE:
+            print(f"Early stopping en la época {epoch} (val_loss sin mejorar {PATIENCE} épocas).")
+            break
+
+# Recupero los mejores pesos antes de evaluar
+if best_state is not None:
+    model.load_state_dict(best_state)
+    print("\nRestaurados los pesos con mejor val_loss.")
+
+# 1) Evaluación sobre el conjunto de TEST (datos nunca vistos)
+test_loss, test_acc = evaluar(model, test_dl, criterion)
+print(f"Test loss:     {test_loss:.4f}")
+print(f"Test accuracy: {test_acc:.4f}")
+
+# 2) Curvas de entrenamiento vs validación
+epochs_range = range(1, len(history["train_loss"]) + 1)
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+axes[0].plot(epochs_range, history["train_loss"], marker="o", label="train")
+axes[0].plot(epochs_range, history["val_loss"], marker="o", label="val")
+axes[0].set_title("Loss por época"); axes[0].set_xlabel("época"); axes[0].legend()
+
+axes[1].plot(epochs_range, history["train_acc"], marker="o", label="train")
+axes[1].plot(epochs_range, history["val_acc"], marker="o", label="val")
+axes[1].set_title("Accuracy por época"); axes[1].set_xlabel("época"); axes[1].legend()
+
+plt.show()
+
+# 3) Informe por clase y matriz de confusión
+from sklearn.metrics import classification_report, confusion_matrix
+
+model.eval()
+preds = []
+with torch.no_grad():
+    for input_ids, attention_mask, labels in test_dl:
+        logits = model(input_ids.to(device), attention_mask.to(device))
+        preds.append(logits.argmax(dim=1).cpu().numpy())
+y_pred = np.concatenate(preds)
+
+print(classification_report(y_test, y_pred, target_names=class_names, digits=3))
+
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=class_names, yticklabels=class_names)
+plt.xlabel("Predicho"); plt.ylabel("Real")
+plt.title("Matriz de confusión (test)")
+plt.show()
+
+

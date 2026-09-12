@@ -1,0 +1,20 @@
+# Entorno virtual
+.venv/
+
+# Cachés de Python
+__pycache__/
+*.pyc
+
+# Notebooks y datos
+.ipynb_checkpoints/
+data/
+*.csv
+
+# Modelos entrenados
+*.pt
+*.bin
+checkpoints/
+
+# Editor
+.vscode/
+.idea/
