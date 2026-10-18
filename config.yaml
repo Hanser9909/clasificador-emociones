@@ -3,7 +3,7 @@ model:
   num_labels: 6
 
 training:
-  learning_rate: 2e-5
+  learning_rate: 0.00002
   batch_size: 32
   epochs: 4
 

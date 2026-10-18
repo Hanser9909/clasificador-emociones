@@ -7,6 +7,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 from emociones.data import cargar_datos, tokenizar_datos
 from emociones.model import BertClassifier
+from pathlib import Path
 
 
 # --------------------------------------------------
@@ -111,7 +112,6 @@ optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=config["training"]["learning_rate"]
 )
-
 
 # --------------------------------------------------
 # FUNCIÓN DE EVALUACIÓN
@@ -337,3 +337,15 @@ cm = confusion_matrix(
 
 print("\nMatriz de confusión:")
 print(cm)
+
+# --------------------------------------------------
+# GRUARDAR MODELO Y TOKENIZADOR
+# --------------------------------------------------
+
+output_dir = Path("models/emociones-bert")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+torch.save(model.state_dict(), output_dir / "modelo.pt")
+tokenizer.save_pretrained(output_dir)
+
+print(f"Modelo guardado en {output_dir}")

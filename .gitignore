@@ -18,3 +18,6 @@ checkpoints/
 # Editor
 .vscode/
 .idea/
+
+# Modelos guardados
+models/
