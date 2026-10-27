@@ -11,7 +11,6 @@ RUN uv sync --frozen --no-install-project --no-dev
 
 # Después el código y el modelo
 COPY src/ ./src/
-COPY models/ ./models/
 COPY config.yaml README.md ./
 
 RUN uv sync --frozen --no-dev

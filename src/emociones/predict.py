@@ -6,21 +6,25 @@ from transformers import AutoTokenizer
 
 from emociones.model import BertClassifier
 
-MODEL_DIR = Path("models/emociones-bert")
+from huggingface_hub import snapshot_download
+
+REPO_ID = "Hanser9909/emociones-bert"
 MODEL_NAME = "bert-base-uncased"
 ETIQUETAS = ["sadness", "joy", "love", "anger", "fear", "surprise"]
 
 
 @lru_cache(maxsize=1)
 def cargar_modelo():
-    """Carga el tokenizer y el modelo entrenado. Solo se ejecuta la primera vez."""
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+    """Descarga el modelo de Hugging Face (o usa la caché) y lo carga."""
+    ruta = Path(snapshot_download(repo_id=REPO_ID))
+
+    tokenizer = AutoTokenizer.from_pretrained(ruta)
 
     modelo = BertClassifier(
         num_classes=len(ETIQUETAS),
         model_name=MODEL_NAME,
     )
-    pesos = torch.load(MODEL_DIR / "modelo.pt", map_location="cpu")
+    pesos = torch.load(ruta / "modelo.pt", map_location="cpu")
     modelo.load_state_dict(pesos)
     modelo.eval()
 
