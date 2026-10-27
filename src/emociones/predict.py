@@ -8,8 +8,8 @@ from emociones.model import BertClassifier
 
 from huggingface_hub import snapshot_download
 
-REPO_ID = "Hanser9909/emociones-bert"
-MODEL_NAME = "bert-base-uncased"
+REPO_ID = "Hanser9909/emociones-distilbert"
+MODEL_NAME = "distilbert-base-uncased"
 ETIQUETAS = ["sadness", "joy", "love", "anger", "fear", "surprise"]
 
 

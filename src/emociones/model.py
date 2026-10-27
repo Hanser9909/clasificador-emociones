@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from transformers import BertModel
+from transformers import AutoModel
 
 
 MODEL_NAME = "bert-base-uncased"
@@ -16,7 +16,7 @@ class BertClassifier(nn.Module):
     ):
         super().__init__()
 
-        self.bert = BertModel.from_pretrained(model_name)
+        self.bert = AutoModel.from_pretrained(model_name)
 
         self.dropout = nn.Dropout(dropout_rate)
 
